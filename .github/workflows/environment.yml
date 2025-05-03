@@ -1,6 +1,7 @@
 name: Environment variable
 on: push
 jobs:
+  run:
   runs-on: ubuntu-latest
   env:
     BRANCH:main
