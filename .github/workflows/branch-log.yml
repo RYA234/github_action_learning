@@ -114,23 +114,30 @@ jobs:
           | Branches merged | $MERGED_COUNT |
           | Recent activity (last 7 days) | $RECENT_EVENTS |
 
-          ## Recent Events (Last 10)
+          <details>
+          <summary>Recent Events (Last 200)</summary>
 
           | Event | Branch | Actor | Timestamp |
           |-------|--------|-------|-----------|
           EOF
 
-          jq -r '.[-10:] | reverse | .[] | "| \(.event) | \(.branch) | @\(.actor) | \(.timestamp) |"' branch-history.json >> Branch-Activity-Report.md
+          jq -r '.[-200:] | reverse | .[] | "| \(.event) | \(.branch) | @\(.actor) | \(.timestamp) |"' branch-history.json >> Branch-Activity-Report.md
 
           cat >> Branch-Activity-Report.md <<EOF
 
-          ## Top Contributors
+          </details>
+
+          <details>
+          <summary>Top Contributors</summary>
 
           | Actor | Events |
           |-------|--------|
           EOF
 
           jq -r 'group_by(.actor) | map({actor: .[0].actor, count: length}) | sort_by(.count) | reverse | .[] | "| @\(.actor) | \(.count) |"' branch-history.json >> Branch-Activity-Report.md
+
+          echo "" >> Branch-Activity-Report.md
+          echo "</details>" >> Branch-Activity-Report.md
 
       - name: Push to Wiki
         run: |
