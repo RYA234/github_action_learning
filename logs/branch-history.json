@@ -1,0 +1,9 @@
+[
+  {
+    "event": "delete",
+    "branch": "aaa",
+    "actor": "RYA234",
+    "timestamp": "2026-02-07T01:34:43Z",
+    "commit_sha": "fbcb9c138f940f77230e2f89b87ace756172e60a"
+  }
+]
