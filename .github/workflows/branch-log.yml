@@ -141,9 +141,10 @@ jobs:
       issues: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (最新のログを含む)
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
       - name: Generate branch report
