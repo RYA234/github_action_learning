@@ -1,0 +1,240 @@
+name: Branch Log Management
+
+on:
+  create:
+  delete:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:  # 手動実行
+
+jobs:
+  log-branch-event:
+    # create/delete イベントの場合のみ実行
+    if: github.event_name == 'create' || github.event_name == 'delete'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create logs directory
+        run: mkdir -p logs
+
+      - name: Log branch event
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.event.ref_type }}
+          REF: ${{ github.event.ref }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          # ブランチイベントのみ記録（タグは除外）
+          if [ "$REF_TYPE" != "branch" ]; then
+            echo "Not a branch event, skipping..."
+            exit 0
+          fi
+
+          # ログファイルの初期化（存在しない場合）
+          if [ ! -f logs/branch-history.json ]; then
+            echo "[]" > logs/branch-history.json
+          fi
+
+          # イベント情報をJSON形式で記録
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # 新しいログエントリを作成
+          NEW_ENTRY=$(cat <<EOF
+          {
+            "event": "$EVENT_NAME",
+            "branch": "$REF",
+            "actor": "$ACTOR",
+            "timestamp": "$TIMESTAMP",
+            "commit_sha": "${{ github.sha }}"
+          }
+          EOF
+          )
+
+          # 既存のログに追加
+          jq --argjson entry "$NEW_ENTRY" '. += [$entry]' logs/branch-history.json > logs/branch-history.tmp
+          mv logs/branch-history.tmp logs/branch-history.json
+
+          echo "Branch event logged: $EVENT_NAME - $REF by $ACTOR"
+
+      - name: Commit and push log
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add logs/branch-history.json
+            git commit -m "chore: log branch event - ${{ github.event_name }} ${{ github.event.ref }}"
+            git push
+          else
+            echo "No changes to commit"
+          fi
+
+  log-merge-event:
+    # PRがマージされた場合のみ実行
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create logs directory
+        run: mkdir -p logs
+
+      - name: Log merge event
+        run: |
+          # ログファイルの初期化（存在しない場合）
+          if [ ! -f logs/branch-history.json ]; then
+            echo "[]" > logs/branch-history.json
+          fi
+
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # マージイベント情報をJSON形式で記録
+          NEW_ENTRY=$(cat <<EOF
+          {
+            "event": "merge",
+            "branch": "${{ github.event.pull_request.head.ref }}",
+            "base_branch": "${{ github.event.pull_request.base.ref }}",
+            "actor": "${{ github.actor }}",
+            "timestamp": "$TIMESTAMP",
+            "pr_number": ${{ github.event.pull_request.number }},
+            "commit_sha": "${{ github.event.pull_request.merge_commit_sha }}"
+          }
+          EOF
+          )
+
+          jq --argjson entry "$NEW_ENTRY" '. += [$entry]' logs/branch-history.json > logs/branch-history.tmp
+          mv logs/branch-history.tmp logs/branch-history.json
+
+          echo "Merge event logged: ${{ github.event.pull_request.head.ref }} -> ${{ github.event.pull_request.base.ref }} (PR #${{ github.event.pull_request.number }})"
+
+      - name: Commit and push log
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add logs/branch-history.json
+            git commit -m "chore: log merge event - PR #${{ github.event.pull_request.number }}"
+            git push
+          fi
+
+  generate-report:
+    # workflow_dispatch (手動実行) の場合のみ実行
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate branch report
+        id: report
+        run: |
+          if [ ! -f logs/branch-history.json ]; then
+            echo "No branch history found"
+            echo "report_exists=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # レポート生成
+          TOTAL_EVENTS=$(jq 'length' logs/branch-history.json)
+          CREATED_COUNT=$(jq '[.[] | select(.event == "create")] | length' logs/branch-history.json)
+          DELETED_COUNT=$(jq '[.[] | select(.event == "delete")] | length' logs/branch-history.json)
+          MERGED_COUNT=$(jq '[.[] | select(.event == "merge")] | length' logs/branch-history.json)
+
+          # 最近7日間のアクティブブランチ
+          WEEK_AGO=$(date -u -d '7 days ago' +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v-7d +"%Y-%m-%dT%H:%M:%SZ")
+          RECENT_EVENTS=$(jq --arg week_ago "$WEEK_AGO" '[.[] | select(.timestamp > $week_ago)] | length' logs/branch-history.json)
+
+          # 現在の全ブランチ一覧
+          CURRENT_BRANCHES=$(git branch -r | grep -v HEAD | wc -l)
+
+          # レポートをMarkdown形式で作成
+          cat > logs/branch-report.md <<EOF
+          # Branch Activity Report
+
+          Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          ## Summary
+
+          - **Total events logged**: $TOTAL_EVENTS
+          - **Branches created**: $CREATED_COUNT
+          - **Branches deleted**: $DELETED_COUNT
+          - **Branches merged**: $MERGED_COUNT
+          - **Current remote branches**: $CURRENT_BRANCHES
+          - **Recent activity (last 7 days)**: $RECENT_EVENTS events
+
+          ## Recent Events (Last 10)
+
+          EOF
+
+          # 最新10件のイベントを追加
+          jq -r '.[-10:] | reverse | .[] | "- **\(.event)** \(.branch) by @\(.actor) at \(.timestamp)"' logs/branch-history.json >> logs/branch-report.md
+
+          cat >> logs/branch-report.md <<EOF
+
+          ## Top Contributors
+
+          EOF
+
+          # 貢献者別の統計
+          jq -r 'group_by(.actor) | map({actor: .[0].actor, count: length}) | sort_by(.count) | reverse | .[] | "- @\(.actor): \(.count) events"' logs/branch-history.json >> logs/branch-report.md
+
+          echo "report_exists=true" >> $GITHUB_OUTPUT
+
+          # レポート内容を環境変数に保存（Issue作成用）
+          echo "REPORT_CONTENT<<EOF" >> $GITHUB_ENV
+          cat logs/branch-report.md >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Publish report to GitHub Wiki
+        if: steps.report.outputs.report_exists == 'true'
+        run: |
+          # Wikiリポジトリをクローン
+          git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git wiki
+
+          # Wikiディレクトリに移動
+          cd wiki
+
+          # Git設定
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # レポートをWikiページとしてコピー
+          cp ../logs/branch-report.md Branch-Activity-Report.md
+
+          # 変更をコミット・プッシュ
+          git add Branch-Activity-Report.md
+          git commit -m "Update branch activity report - $(date -u +"%Y-%m-%d")" || echo "No changes to commit"
+          git push origin master
+
+      - name: Create Issue with report (optional)
+        if: steps.report.outputs.report_exists == 'true' && github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Branch Activity Report - ${new Date().toISOString().split('T')[0]}`,
+              body: process.env.REPORT_CONTENT,
+              labels: ['report', 'automated']
+            });
