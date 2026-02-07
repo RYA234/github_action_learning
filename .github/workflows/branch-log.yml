@@ -16,10 +16,14 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout default branch
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
+
+      - name: Pull latest changes
+        run: git pull origin ${{ github.event.repository.default_branch }}
 
       - name: Create logs directory
         run: mkdir -p logs
@@ -84,10 +88,14 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout default branch
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
+
+      - name: Pull latest changes
+        run: git pull origin ${{ github.event.repository.default_branch }}
 
       - name: Create logs directory
         run: mkdir -p logs
@@ -172,7 +180,7 @@ jobs:
           # 現在の全ブランチ一覧
           CURRENT_BRANCHES=$(git branch -r | grep -v HEAD | wc -l)
 
-          # レポートをMarkdown形式で作成
+          # レポートをMarkdown形式で作成（テーブル形式）
           cat > logs/branch-report.md <<EOF
           # Branch Activity Report
 
@@ -180,28 +188,34 @@ jobs:
 
           ## Summary
 
-          - **Total events logged**: $TOTAL_EVENTS
-          - **Branches created**: $CREATED_COUNT
-          - **Branches deleted**: $DELETED_COUNT
-          - **Branches merged**: $MERGED_COUNT
-          - **Current remote branches**: $CURRENT_BRANCHES
-          - **Recent activity (last 7 days)**: $RECENT_EVENTS events
+          | 項目 | 件数 |
+          |------|------|
+          | Total events logged | $TOTAL_EVENTS |
+          | Branches created | $CREATED_COUNT |
+          | Branches deleted | $DELETED_COUNT |
+          | Branches merged | $MERGED_COUNT |
+          | Current remote branches | $CURRENT_BRANCHES |
+          | Recent activity (last 7 days) | $RECENT_EVENTS |
 
           ## Recent Events (Last 10)
 
+          | Event | Branch | Actor | Timestamp |
+          |-------|--------|-------|-----------|
           EOF
 
-          # 最新10件のイベントを追加
-          jq -r '.[-10:] | reverse | .[] | "- **\(.event)** \(.branch) by @\(.actor) at \(.timestamp)"' logs/branch-history.json >> logs/branch-report.md
+          # 最新10件のイベントをテーブル行として追加
+          jq -r '.[-10:] | reverse | .[] | "| \(.event) | \(.branch) | @\(.actor) | \(.timestamp) |"' logs/branch-history.json >> logs/branch-report.md
 
           cat >> logs/branch-report.md <<EOF
 
           ## Top Contributors
 
+          | Actor | Events |
+          |-------|--------|
           EOF
 
-          # 貢献者別の統計
-          jq -r 'group_by(.actor) | map({actor: .[0].actor, count: length}) | sort_by(.count) | reverse | .[] | "- @\(.actor): \(.count) events"' logs/branch-history.json >> logs/branch-report.md
+          # 貢献者別の統計をテーブル行として追加
+          jq -r 'group_by(.actor) | map({actor: .[0].actor, count: length}) | sort_by(.count) | reverse | .[] | "| @\(.actor) | \(.count) |"' logs/branch-history.json >> logs/branch-report.md
 
           echo "report_exists=true" >> $GITHUB_OUTPUT
 
